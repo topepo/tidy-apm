@@ -1,0 +1,56 @@
+# Regression Trees and Rule-Based Models
+
+```{r chapter-08-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(knitr)
+library(tidymodels)
+library(rules)
+library(baguette)
+
+cores <- parallel::detectCores()
+if (!grepl("mingw32", R.Version()$platform)) {
+ library(doMC)
+ registerDoMC(cores = cores)
+} else {
+  library(doParallel)
+  cl <- makePSOCKcluster(cores)
+  registerDoParallel(cl)
+}
+```
+
+As before, we first load some objects to enable our analysis of the solubility data:
+
+```{r chapter-08-prereq}
+library(tidymodels)
+tidymodels_prefer()
+load("RData/solubility_data.RData")
+
+solubility_rec <- 
+  recipe(solubility ~ ., data = solubility_train) %>% 
+  step_zv(all_predictors()) %>% 
+  step_YeoJohnson(all_numeric_predictors())
+
+normalized_rec <- 
+  solubility_rec %>% 
+  step_normalize(all_numeric_predictors())
+
+solubility_wflw <- 
+  workflow() %>% 
+  add_recipe(solubility_rec)
+
+rs_ctrl <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+gd_ctrl <- control_grid(save_pred = TRUE, save_workflow = TRUE, parallel_over = "everything")
+bo_ctrl <- control_bayes(save_pred = TRUE, save_workflow = TRUE, 
+                         verbose = TRUE, parallel_over = "everything")
+
+rmse_stats <- metric_set(rmse)
+```
+
+The R packages used in this chapter are: `r pkg_text(c("tidymodels", "rpart", "baguette", "ranger", "Cubist", "xgboost"))`. 
+
+
+```{r chapter-08-teardown, include = FALSE}
+if (grepl("mingw32", R.Version()$platform)) {
+ stopCluster(cl)
+} 
+```

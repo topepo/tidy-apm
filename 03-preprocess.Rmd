@@ -1,0 +1,564 @@
+# Data Pre-Processing
+
+```{r chapter-03-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(knitr)
+library(tidymodels)
+library(patchwork)
+library(e1071)
+library(QSARdata)
+library(ggforce)
+library(corrplot)
+
+pkg_list <- c("e1071", "QSARdata", "tidymodels", "corrplot", "ggforce")
+```
+
+The R package used in this chapter are `r pkg_text(pkg_list)`. 
+
+The `r pkg(recipes)` package is the main focus of this chapter. For more information on recipes, see the page on [`tidymodels.org`](https://www.tidymodels.org/start/recipes/) or Chapter 8 of [_Tidy Models with R_](https://www.tmwr.org/recipes.html). 
+
+:::rmdwarning
+The recipes package is the best way to handle preprocessing of data. In this chapter, we'll use recipes independently of a model to demonstrate the different types of steps. However, when modeling, *we strongly recommend* that you use recipes within a workflow. This is how the rest of the chapters utilize them and is preferred. See the [TMwR Chapter](https://www.tmwr.org/recipes.html#using-recipes) for more details. 
+:::
+
+## Case Study: Cell Segmentation in High-Content Screening
+
+We'll use the version of the data in the `modeldata` package (loaded with `tidymodels`): 
+
+```{r chapter-03-cell-data}
+library(tidymodels)
+tidymodels_prefer()
+
+data(cells)
+
+cell_train <- 
+ cells %>% 
+ filter(case == "Train") %>% 
+ select(-case)
+
+cell_test <- 
+ cells %>% 
+ filter(case == "Test") %>% 
+ select(-case)
+
+nrow(cell_train)
+nrow(cell_test)
+
+count(cells, class)
+
+ncol(cells)
+```
+
+
+## Data Transformations for Individual Predictors
+
+In the following sections, we use the first approach above to demonstrate how recipes work. In most of the other chapters, the second approach is much more common. 
+
+### Centering and Scaling
+
+When preprocessing data with `r pkg(caret)`, the default is to apply the same methods to all of the predictors (e.g., by default, `method = "center"` centers all numeric predictors). 
+
+To start, let's create a basic recipe using the formula method: 
+
+```{r chapter-03-recipe-start}
+cell_rec <- recipe(class ~ ., data = cell_train)
+cell_rec
+summary(cell_rec)
+```
+
+The simply declares that the column `class` is the outcome and that the other columns in `cell_train` should be treated as predictors. The function also determines the data types of each column. From here, we will pipe different _step functions_ into the recipe. 
+
+When using recipes, the columns of the data that to processed need to be explicitly listed . However, there are `r pkg(dplyr)`-like selectors that can capture multiple columns by their role in the analysis (e.g., predictor), type (e.g., numeric), and so on. In the cell segmentation data, all of the predictors are numeric. To center and scale all of the numeric predictors, we can use the `all_numeric_predictors()` selector: 
+
+```{r chapter-03-center-scale}
+cell_rec <- 
+ recipe(class ~ ., data = cell_train) %>% 
+ step_normalize(all_numeric_predictors())
+
+cell_rec
+```
+
+The recipe now specifies that all of the numeric predictors will be centered and scaled using the training set means and standard deviations, respectively. 
+
+The code above does not calculate those means and standard deviations nor does it apply the processing to the data. 
+
+The `prep()` function takes the training set and computes the appropriate statistics. 
+
+```{r chapter-03-center-scale-prep}
+cell_rec <- prep(cell_rec)
+cell_rec
+```
+
+To apply the centering and scaling to a data set, use the `bake()` function. Note that using the `new_data = NULL` option in `bake()` returns the processed training set. 
+
+```{r chapter-03-center-scale-bake}
+# The first five rows of the training set
+bake(cell_rec, new_data = NULL) %>% 
+  slice(1:5) %>% 
+  select(angle_ch_1, total_inten_ch_4)
+
+# compared to the original data:
+cell_train %>% 
+  slice(1:5) %>% 
+  select(angle_ch_1, total_inten_ch_4)
+
+# The first five rows of the test set: 
+cell_norm_test <- bake(cell_rec, cell_test)
+```
+
+Like `r pkg(caret)`, `r pkg(recipes)` follow the same dogmatic methodology: it estimates all preprocessing on the training set and applies it to all data sets. For example, the training set means and standard deviations are used to normalize the test set data; no statistics are recalculated.  
+
+:::rmdwarning
+Again, you should *rarely ever* use `prep()` and `bake()` when modeling with recipes. As will be seen later, the `fit()` and `predict()` functions for workflow objects are the best method for estimating and applying the recipe to data.
+:::
+
+
+### Transformations to Resolve Skewness
+
+We can specify simple, deterministic transformation (like the log) in two different ways. Many common functions have their own step (e.g., `step_log()`, or `step_sqrt()`). For others, `step_mutate()` mirrors the `r pkg(dplyr)` command and can be used for anything. 
+
+Both the Box-Cox and Yeo-Johnson transformations are available in recipe steps.  
+
+To reproduce the analysis in APM:
+
+```{r chapter-03-trans-skew}
+cell_rec <- 
+ recipe(class ~ var_inten_ch_3 + perim_ch_1, data = cell_train) %>% 
+ step_log(var_inten_ch_3) %>% 
+ # or use
+ # step_mutate(var_inten_ch_3 = log(var_inten_ch_3))
+ step_YeoJohnson(perim_ch_1, id = "yj-trans") %>% 
+ prep()
+
+# Skewness before transformation
+cell_train %>% 
+ pluck("var_inten_ch_3") %>% 
+ e1071::skewness()
+
+# After log
+cell_rec %>% 
+ bake(new_data = NULL) %>% 
+ pluck("var_inten_ch_3") %>% 
+ e1071::skewness()
+```
+
+Plotting the data before and after the transformation: 
+
+```{r chapter-03-fig-02-03}
+var_inten_ch_3_before <- 
+ cell_train %>% 
+ ggplot(aes(x = var_inten_ch_3)) + 
+ geom_histogram(bins = 20, fill = "blue", alpha = .6, col = "white") + 
+ xlab("var_inten_ch_3 (Natural Units)")
+
+var_inten_ch_3_after <- 
+ cell_rec %>% 
+ bake(new_data = NULL) %>% 
+ ggplot(aes(x = var_inten_ch_3)) + 
+ geom_histogram(bins = 20, fill = "blue", alpha = .6, col = "white") + 
+ xlab("var_inten_ch_3 (Log Units)")
+
+perim_ch_1_before <- 
+ cell_train %>% 
+ ggplot(aes(x = perim_ch_1)) + 
+ geom_histogram(bins = 20, fill = "blue", alpha = .6, col = "white") + 
+ xlab("perim_ch_1 (Natural Units)")
+
+perim_ch_1_after <- 
+ cell_rec %>% 
+ bake(new_data = NULL) %>% 
+ ggplot(aes(x = perim_ch_1)) + 
+ geom_histogram(bins = 20, fill = "blue", alpha = .6, col = "white") + 
+ xlab("perim_ch_1 (Transformed Data)")
+
+(var_inten_ch_3_before + var_inten_ch_3_after) /
+  (perim_ch_1_before + perim_ch_1_after)
+```
+
+How can we obstain the Yeo-Johnson transformation parameter from the recipe? The `tidy()` method is used. 
+
+By itself, it lists the steps used in the recipe:
+
+```{r chapter-03-tidy-recipe}
+tidy(cell_rec)
+```
+
+To run `tidy()` on the results of particular step, use the `number` or `id` arguments for the step of interest: 
+
+```{r chapter-03-fig-03}
+tidy(cell_rec, number = 2)
+
+# Better to use a specific ID
+tidy(cell_rec, id = "yj-trans")
+```
+
+
+## Data Transformations for Multiple Predictors
+
+### Transformations to Resolve Outliers
+
+Left: An illustrative example with a group of outlying data points. Right: When the original data are transformed, the results bring the outliers towards the majority of the data: 
+
+Figure 3.4 from _APM_ uses data from the `r pkg(QSARdata)` package. Two predictors are in the `sp_sign_data` tibble:
+
+```{r chapter-03-fig-04-data, include = FALSE}
+data(Mutagen, package = "QSARdata")
+
+sp_sign_data <- 
+  Mutagen_Dragon %>% 
+  select(var_1 = RDF025m, var_2 = RTp) %>% 
+  filter(var_1 > 0) %>% 
+  recipe(formula = ~ .) %>% 
+  step_log(all_numeric_predictors()) %>% 
+  prep() %>% 
+  bake(new_data = NULL)
+```
+
+```{r chapter-03-sp-sign-data}
+sp_sign_data
+```
+
+The `step_spatialsign()` step is used. Note that it requires the data to be in the same units (we apply `step_normalize()` for this) and replaces the existing data columns: 
+
+```{r chapter-03-fig-04}
+sp_sign_rec <- 
+  recipe( ~ ., data = sp_sign_data) %>% 
+  step_normalize(var_1, var_2) %>%
+  step_spatialsign(var_1, var_2) %>%
+  prep()
+
+sp_sign_rec %>% 
+  bake(new_data = NULL) %>% 
+  ggplot(aes(x = var_1, y = var_2)) + 
+  geom_point(size = 0.25, alpha = 0.5) + 
+  coord_fixed()
+```
+
+### Data Reduction and Feature Extraction
+
+For principal component analysis (PCA), `step_pca()` is used and also requires the columns of the data to be on the same units. We also apply a Yeo-Johnson transformation to resolve skewness. 
+
+The shapes and colors indicate which cells were poorly segmented or well segmented:
+
+```{r chapter-03-pca-comps}
+bc_rec <- 
+ recipe(class ~ avg_inten_ch_1 + entropy_inten_ch_1, data = cell_train) %>% 
+ step_YeoJohnson(all_numeric_predictors()) %>% 
+ prep()
+
+pca_rec <- 
+ bc_rec %>% 
+ step_normalize(all_numeric_predictors()) %>% 
+ step_pca(all_numeric_predictors()) %>% 
+ prep()
+```
+
+There are two arguments to specify many components are computed. The argument `num_comp` is an integer while `threshold` specifies what percentage of the variation should be captured. In the latter case, it selects enough components as appropriate for the data set. 
+
+Plotting the original data and the results: 
+
+```{r chapter-03-fig-05}
+bc_plot <- 
+ bc_rec %>% 
+ bake(new_data = NULL) %>% 
+ ggplot(aes(x = entropy_inten_ch_1, y = avg_inten_ch_1, col = class)) + 
+ geom_point(alpha = .3) + 
+ xlab("Channel 1 Fiber Width") + 
+ ylab("Intensity Entropy Channel 1") 
+
+pca_plot <- 
+ pca_rec %>% 
+ bake(new_data = NULL) %>% 
+ ggplot(aes(x = PC1, y = PC2, col = class)) + 
+ geom_point(alpha = .3) + 
+ coord_obs_pred()+ 
+ xlab("Principal Component #1") + 
+ ylab("Principal Component #2")
+
+bc_plot + pca_plot
+```
+To conduct PCA on the entire predictor set:
+
+```{r chapter-03-fig-07, fig.height=7.5}
+all_pca_rec <- 
+ recipe(class ~ ., data = cell_train) %>% 
+ step_YeoJohnson(all_numeric_predictors()) %>% 
+ step_normalize(all_numeric_predictors()) %>% 
+ step_pca(all_numeric_predictors(), num_comp = 3, id = "pca") %>% 
+ prep()
+
+library(ggforce) # For a scatter plot matrix
+all_pca_rec %>% 
+ bake(new_data = NULL) %>% 
+ select(PC1, PC2, PC3, class) %>% 
+ ggplot(aes(x = .panel_x, y = .panel_y, fill = class, colour = class)) + 
+  geom_point(position = 'auto', alpha = .2) + 
+  geom_autodensity(alpha = 0.3, colour = NA, position = 'identity') + 
+  facet_matrix(vars(PC1, PC2, PC3), layer.diag = 2)
+```
+
+We can create a plot of the loadings of the first three principal components for the cell segmentation data, colored by optical channel. Recall that channel one was associated with the cell body, channel two with the cell nucleus, channel three with actin, and channel four with tubulin. 
+
+The code below uses the `tidy()` method the get the data, `tidyr::pivot_wider()` to rearrange them, then the `r pkg(ggforce)` package to produce a scatter plot matrix: 
+
+```{r chapter-03-fig-08, fig.height=7.5}
+all_pca_rec %>% 
+ tidy(id = "pca") %>% 
+ select(-id) %>% 
+ pivot_wider(
+  id_cols = "terms",
+  names_from = "component",
+  values_from = "value"
+ ) %>% 
+ select(PC1, PC2, PC3, terms) %>% 
+ mutate(
+  channel = case_when(
+   grepl("1$", terms) ~ "Channel 1",
+   grepl("2$", terms) ~ "Channel 2",
+   grepl("3$", terms) ~ "Channel 3",
+   TRUE ~ "Channel 4"
+  )
+ ) %>% 
+  # ggforce syntax for a scatterplot matrix: 
+  ggplot(aes(x = .panel_x, y = .panel_y, color = channel, shape = channel)) + 
+  geom_point(position = 'auto') + 
+  facet_matrix(vars(PC1, PC2, PC3), layer.diag = 2)
+```
+
+The [learntidymodels](https://github.com/tidymodels/learntidymodels) package on GitHub has some nice convenience functions for plotting PCA loadings.
+
+Finally, note that, unlike the spatial sign, the original data are replaced with the PCA columns. 
+
+## Dealing with Missing Values
+
+
+```{r chapter-03-impute-functions, include = FALSE}
+funs <- ls(asNamespace("recipes"), pattern = "^step_impute")
+funs <- funs[!grepl("new$", funs)]
+funs <- paste0("`", funs, "()`")
+funs <- knitr::combine_words(funs)
+```
+
+`r pkg(recipes)` has a number of imputation functions: `r I(funs)`
+
+These functions conduct a single imputation. To demonstrate, we'll add some missing data to the test set and create a basic recipe that estimates a Yeo-Johnson transformation:
+
+```{r chapter-03-imp-data}
+missing_ind <- seq(1, 500, by = 5)
+with_missing <- cell_test
+with_missing$avg_inten_ch_1[missing_ind] <- NA
+
+basic_rec <- 
+  recipe(class ~ ., data = cell_train) %>% 
+  step_YeoJohnson(all_numeric_predictors()) %>% 
+  prep()
+
+real_results <-
+  bake(basic_rec, cell_test) %>% 
+  select(truth = avg_inten_ch_1)
+```
+
+The imputation steps select the columns that will have their own imputation model using other predictors as inputs. Most imputation steps also have an argument called `impute_with` that specifies what columns should be used to impute the columns of interest. 
+
+To demonstrate, linear regression and K-nearest neighbors are used to impute the `avg_inten_ch_1` column. The results for the missing rows are then plotted against one another. 
+
+```{r chapter-03-imputation}
+linear_imp_rec <- 
+  basic_rec %>% 
+  step_impute_linear(avg_inten_ch_1, impute_with = vars(matches("ch_1"))) %>% 
+  prep()
+
+linear_results <-
+  bake(linear_imp_rec, with_missing) %>% 
+  select(linear_imputation = avg_inten_ch_1)
+
+knn_imp_rec <- 
+  basic_rec %>% 
+  step_impute_knn(avg_inten_ch_1, impute_with = vars(matches("ch_1"))) %>% 
+  prep()
+
+knn_results <-
+  bake(knn_imp_rec, with_missing) %>% 
+  select(knn_imputation = avg_inten_ch_1)
+
+bind_cols(
+  linear_results, 
+  knn_results, 
+  real_results
+) %>% 
+  slice(missing_ind) %>% 
+  pivot_longer(-truth) %>% 
+  ggplot(aes(x = truth, y = value)) + 
+  geom_abline(lty = 2) +
+  geom_point(alpha = .3) +
+  facet_wrap(~ name) +
+  coord_fixed()
+```
+
+The warning about a "rank-deficient fit" comes from some predictors being almost completely correlated with `avg_inten_ch_1` (see the correlation matrix plot later in this chapter). This is the reason that the linear imputation works best for these data. 
+
+## Removing Predictors
+
+There are a number of unsupervised filtering steps: `step_zv()`, `step_nzv()`, `step_lincomb()`, and `step_corr()`. The first two are for zero- and near-zero variance filters. The last two help with highly correlated predictors. To demonstrate, we will remove any linear combinations that exist in the data: 
+
+```{r chapter-03-linear-comb}
+filtered_rec <- 
+    recipe(class ~ ., data = cell_train) %>% 
+    step_lincomb(all_numeric_predictors(), id = "nzv") %>% 
+    prep()
+
+# One predictor was removed: 
+tidy(filtered_rec, id = "nzv")
+```
+
+`step_corr()` is considered in the next section. 
+
+## Between-Predictor Correlations
+
+The correlation plot shown in _APM_ is recreated using: 
+
+```{r chapter-03-fig-10}
+cell_trans_predictors <- 
+ recipe(class ~ ., data = cell_train) %>% 
+ step_YeoJohnson(all_numeric_predictors()) %>% 
+ prep() %>% 
+ bake(new_data = NULL, all_predictors())
+
+cell_corr <- cor(cell_trans_predictors)
+
+corrplot::corrplot(cell_corr, order = "hclust", tl.cex = .35, addgrid.col = NA)
+```
+
+To filter predictors using their pairwise, absolute correlations, `step_corr()` is used: 
+
+```{r chapter-03-corr}
+filtered_corr_rec <- 
+    recipe(class ~ ., data = cell_train) %>% 
+    step_corr(all_numeric_predictors(), threshold = 0.5, id = "cor filter") %>% 
+    prep()
+
+# Predictors removed: 
+tidy(filtered_corr_rec, id = "cor filter")
+
+# Remaining: 
+filtered_corr_rec %>% bake(new_data = NULL) %>% ncol()
+```
+
+
+## Adding Predictors
+
+Recipes do not automatically create indicator variables for predictors encoded as factors. To do this, use `step_dummy()`. The Palmer penguin data are used to demonstrate:
+
+```{r chapter-03-dummies}
+data(penguins)
+penguins <- na.omit(penguins)
+
+penguin_rec <- 
+  recipe(~ ., data = penguins) %>% 
+  step_dummy(all_nominal_predictors()) %>% # <- captures factor or character cols
+  prep()
+
+penguins %>% names()
+bake(penguin_rec, new_data = NULL) %>% names()
+```
+
+Note that the column names and factor levels are not simply mashed together. 
+
+The standard procedure (at least, in statistics) is to create $C - 1$ indicators when a factor has $C$ categories. Historically, $C - 1$ are used so that a linear dependency is avoided in the design matrix; all $C$ dummy variables would add up row-wise to the intercept column and the inverse matrix for linear regression can't be computed. This technical term for a the design matrix like this is "less than full rank". 
+
+ You might want to get all of them back. To do this, `step_dummy()` has an option called `one_hot` that will make sure that all $C$ are produced:
+
+```{r chapter-03-one-hot}
+penguin_rec <- 
+  recipe(~ ., data = penguins) %>% 
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% 
+  prep()
+
+bake(penguin_rec, new_data = NULL) %>% names()
+```
+
+The option is named that way since this is that the computer scientists call ["one-hot encoding"](https://www.google.com/search?q=one-hot+encoding). 
+
+`step_dummy()` also works with _ordered factors_. As seen above, the default encoding is to create a series of polynomial variables. There are also a few steps for ordered factors:
+
+ * [`step_ordinalscore()`](https://recipes.tidymodels.org/reference/step_ordinalscore.html) can translate the levels to a single numeric score. 
+ * [`step_unorder()`](https://recipes.tidymodels.org/reference/step_unorder.html) can convert to an unordered factor.
+
+
+### Novel Levels {-}
+
+When a recipe is used with new samples, some factors may have acquired new levels that were not present when `prep()` was run. If `step_dummy()` encounters this situation, a warning is issues ("There are new levels in a factor") and the indicator variables that correspond to the factor are assigned missing values. 
+
+One way around this is to use `step_other()`. This step can convert infrequently occurring levels to a new category (that defaults to "other"). This step can also be used to convert new factor levels to "other" also. 
+
+Also, `step_integer()` has functionality similar to [`LabelEncoder`](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.LabelEncoder.html) and encodes new values as zero.
+
+The `r pkg(embed)` package can also handle novel factors levels within a recipe. The `step_embed()` and `step_lencode_*()` operations assign a common numeric score to novel levels.  
+
+### Other Steps Related to Dummy Variables {-}
+
+There are a bunch of steps related to going in-between factors and dummy variables:
+
+ * [`step_unknown()`](https://recipes.tidymodels.org/reference/step_unknown.html) assigns missing factor values into  an `'unknown'` category.
+ * [`step_other()`](https://recipes.tidymodels.org/reference/step_other.html) can collapse infrequently occurring levels into `'other'`.
+ * [`step_regex()`](https://recipes.tidymodels.org/reference/step_regex.html) will create a single dummy variable based  on applying a regular expression to a text field. Similarly, [`step_count()`](https://recipes.tidymodels.org/reference/step_count.html) does the same but counts the occurrences of the pattern in the string. 
+ * [`step_holiday()`](https://recipes.tidymodels.org/reference/step_holiday.html) creates dummy variables from date fields to capture holidays. 
+ * [`step_bin2factor()`](https://recipes.tidymodels.org/reference/step_bin2factor.html) takes a binary indicator and makes a factor variable. This can be useful when using naive Bayes models. 
+ * [`embed::step_feature_hash()`](https://embed.tidymodels.org/reference/step_feature_hash.html) can be used to create a set of indicators using [feature hashing](https://bookdown.org/max/FES/encoding-predictors-with-many-categories.html). 
+ 
+
+### Interactions {-}
+
+
+Creating interactions with recipes requires the use of a model formula, such as
+
+```{r chapter-03-num-interact}
+penguin_rec <- 
+  recipe(~ ., data = penguins) %>%
+  step_interact( ~ bill_length_mm:bill_depth_mm) %>%
+  prep()
+bake(penguin_rec, new_data = NULL) %>% names()
+```
+
+In [R model formulae](https://stat.ethz.ch/R-manual/R-devel/library/stats/html/formula.html), using a `*` between two variables would expand to `a*b = a + b + a:b` so that the main effects are included. In [`step_interact()`](https://recipes.tidymodels.org/reference/step_interact.html), you can do use `*`, but only the interactions are recorded as columns that needs to be created. 
+
+One thing that `recipes` does differently than base R is to construct the design matrix in sequential iterations. This is relevant when thinking about interactions between continuous and categorical predictors. 
+
+To use interactions with factor predictors, _you must first make indicators_ and then use a selector to combine them with other predictors: 
+
+```{r chapter-03-interact}
+penguin_rec <- 
+  recipe(~ ., data = penguins) %>%
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ starts_with("island"):body_mass_g + 
+                   bill_length_mm:bill_depth_mm) %>%
+  prep()
+bake(penguin_rec, new_data = NULL) %>% names()
+```
+
+### Class centroids {-}
+
+We can supplement the predictors with other features. _APM_ references a paper that adds features for the distance to class centroids. This can be done with `step_classdist()`: 
+
+```{r chapter-03-centroids}
+centroid_rec <- 
+  recipe(class ~ ., data = cell_train) %>% 
+  # Centroids to the channel 2 predictors:
+  step_classdist(matches("ch_2$"), class = "class") %>% 
+  prep()
+
+centroid_rec %>% 
+  bake(new_data = NULL) %>% 
+  select(starts_with("classdist"))
+```
+
+The negative values are due to the distances, by default, being on the log scale.
+
+
+## Binning Predictors
+
+Generally speaking, [don't discretize/bin numeric predictors](https://bookdown.org/max/FES/numeric-one-to-many.html#binning).
+
+`r pkg(recipes)` contains `step_discretize()`, which creates unsupervised bins. The `r pkg(embed)` package has two steps for supervised binning. 
+
+<img src="https://media1.giphy.com/media/P8Wp5IwIaVAw1hxcVS/giphy.gif">

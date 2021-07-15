@@ -1,0 +1,98 @@
+---
+knit: "bookdown::render_book"
+title: "A tidymodels Companion to Applied Predictive Modeling"
+author: ["Max Kuhn"]
+date: "`r tidy_apm_version()`"
+site: bookdown::bookdown_site
+description: "This website is a tidymodels companion for the 2013 book Applied Predictive Modeling by Max Kuhn and Kjell Johnson."
+github-repo: topepo/tidy-apm
+twitter-handle: topepos
+documentclass: book
+classoption: 11pt
+link-citations: yes
+colorlinks: yes
+---
+
+# Preface {-} 
+
+This website is a tidymodels companion for the 2013 book _Applied Predictive Modeling_ (_APM_) by Max Kuhn and Kjell Johnson. The book heavily uses the `r pkg(caret)` package, written by the first author in 2005. 
+
+The tidymodels framework is a collection of packages for modeling and machine learning using tidyverse principles. If you are new to R or the tidyverse, we recommend that you start by learning some basics about R and the [tidyverse](https://www.tidyverse.org/) first, then return here when you feel ready. Here are some resources to start learning:
+
+* [Finding Your Way To R](https://education.rstudio.com/learn/), from the RStudio Education team.
+
+* [Learn the tidyverse](https://www.tidyverse.org/learn/), from the tidyverse team.
+
+If you are already acquainted with the tidyverse and are looking for some tidymodels basics, start with: 
+
+* [`tidymodels.org`](https://www.tidymodels.org/). There is a sequence of [_Get Started_](https://www.tidymodels.org/start/) articles that cover the basics. 
+
+* [_Tidy Modeling with R_](https://tmwr.org) is a book that has in-depth details. 
+
+
+## What this website is {-}
+
+Each chapter in _APM_ has a computing section that describes in detail how the analyses in that chapter were conducted. This website aims to be an update to those computing sections that show how to conduct the same analyses with tidymodels. 
+
+## What this website isn't {-}
+
+This isn't a reproduction of _APM_. There is the assumption that you are reading along with _APM_ and will consult this site when you are interested in the software details. 
+
+## Caveats {-}
+
+tidymodels is a different implementation than `r pkg(caret)` and, in some cases, takes a different technical approach. `r pkg(caret)` wraps over 200 different model implementations and tidymodels deliberately has fewer interfaces. There will be some areas that have no tidymodels analogs. For example, packages that call Java from within R, such as `r pkg(RWeka)` are very burdensome to support. This site does not show to fit those models with tidymodels because they are not supported. 
+
+On the website: 
+
+:::rmdcarrot
+These boxes describe differences between tidymodels packages and `r pkg(caret)`. 
+
+The icon was made by <a href="https://www.flaticon.com/authors/freepik" title="Freepik">Freepik</a> and was obtained from <a href="https://www.flaticon.com/free-icon/open-book_167755?term=book&page=1&position=27" title="Flaticon"> www.flaticon.com</a>
+:::
+
+There are a few situations where the software uses different R package to fit the models than `r pkg(caret)` uses and the results are appreciably different. In those cases: 
+
+:::rmdnotequal
+These boxes are indicators that the subsequent results are substantially different from the original text. 
+
+The icon was made by <a href="https://www.flaticon.com/authors/freepik" title="Freepik">Freepik</a> and was obtained from <a href="https://www.flaticon.com/free-icon/not-equal_3486428" title="Flaticon"> www.flaticon.com</a>
+:::
+
+## Background materials {-}
+
+When new concepts are introduced, the website provides specific links to resources to help learn more. 
+
+:::rmdrefs
+These boxes give links to background materials on the specific tidymodels packages that are used in that chapter. 
+
+The icon was made by <a href="https://www.flaticon.com/authors/freepik" title="Freepik">Freepik</a> and was obtained from <a href="https://www.flaticon.com/free-icon/carrot_2598586" title="Flaticon"> www.flaticon.com</a>
+:::
+
+
+
+## Contributions and usage {-}
+
+This openness also allows users to contribute if they wish. Most often, this comes in the form of correcting typos, grammar, and other aspects of our work that could use improvement. Instructions for making contributions can be found in the [`contributing.md`](https://github.com/topepo/tidy-apm/blob/master/contributing.md) file. Also, be aware that this effort has a code of conduct, which can be found at [`code_of_conduct.md`](https://github.com/topepo/tidy-apm/blob/master/code_of_conduct.md). 
+
+These materials are provided under a Creative Commons Attribution license. This license makes it easy to reuse code and plots in other training materials. 
+
+
+## Technical Details {-}
+
+This book was written in [RStudio](http://www.rstudio.com/ide/) using [bookdown](http://bookdown.org/). The [website](linkhere) is hosted via [Netlify](http://netlify.com/). The complete source is available on [GitHub](https://github.com/topepo/tidy-apm). We generated all plots in this book using [ggplot2](https://ggplot2.tidyverse.org/) and its black and white theme (`theme_bw()`). This version of the book was locally built on `r osVersion` with `r R.version.string`, [pandoc](https://pandoc.org/) version `r rmarkdown::pandoc_version()`, and the following packages:
+
+```{r pkg-list, echo = FALSE, results="asis"}
+deps <- desc::desc_get_deps()
+pkgs <- sort(deps$package[deps$type == "Imports"])
+pkgs <- sessioninfo::package_info(pkgs, dependencies = FALSE)
+df <- tibble::tibble(
+  package = paste0("`", pkgs$package, "`"),
+  version = pkgs$ondiskversion,
+  source = gsub("@", "\\\\@", pkgs$source)
+)
+df <- dplyr::arrange(df, package)
+knitr::kable(df, format = "markdown")
+```
+
+Note that the [`_common.R`](https://github.com/topepo/tidy-apm/blob/main/_common.R) file is sourced before compiling each chapter. This sets several options related visual themes in each chapter and managing naming conflicts. 
+

@@ -1,0 +1,90 @@
+# (PART\*) Regression Models {-} 
+
+# Measuring Performance in Regression Models
+
+```{r chapter-05-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(knitr)
+library(tidymodels)
+library(patchwork)
+```
+
+tidymodels focuses more on data frames rather than individual vectors. Let's keep our observed and predicted values from a regression model in a data frame: 
+
+```{r chapter-05-example-data}
+library(tidymodels)
+tidymodels_prefer()
+
+numeric_predictions <- 
+ tibble::tribble(
+  ~observed, ~predicted,
+       0.22,       0.24,
+       0.83,       0.78,
+      -0.12,      -0.66,
+       0.89,       0.53,
+      -0.23,        0.7,
+       -1.3,      -0.75,
+      -0.15,      -0.41,
+       -1.4,      -0.43,
+       0.62,       0.49,
+       0.99,       0.79,
+      -0.18,      -1.19,
+       0.32,       0.06,
+       0.34,       0.75,
+       -0.3,      -0.07,
+       0.04,       0.43,
+      -0.87,      -0.42,
+       0.55,      -0.25,
+       -1.3,      -0.64,
+      -1.15,      -1.26,
+        0.2,      -0.07
+ )
+```
+
+Let's visualize these values in a scatter plot, add a diagonal reference line, and scale the axes to be the same. We'll also add a residual plot and then put them in the same figure using the `r pkg(patchwork)` package:
+
+```{r chapter-05-fig-03}
+library(patchwork)
+theme_set(theme_bw())
+
+obs_vs_pred <- 
+ ggplot(numeric_predictions, aes(x = observed, y = predicted)) + 
+ geom_point() + 
+ # Adds a diagonal reference line
+ geom_abline(col = "darkgrey", lty = 2) + 
+ # Scales the axes to be the same based on the range of both
+ # dimensions. 
+ coord_obs_pred()
+
+residual_plot <- 
+ numeric_predictions %>% 
+ mutate(residual = observed - predicted) %>% 
+ ggplot(aes(x = predicted, y = residual)) + 
+ geom_point() + 
+ geom_hline(yintercept = 0, col = "darkgrey", lty = 2) 
+
+obs_vs_pred + residual_plot + plot_layout(ncol = 2)
+```
+
+The `r pkg(yardstick)` package contains functions for computing performance metrics. For example, for $R^2$ and RMSE: 
+
+```{r chapter-5-basic}
+numeric_predictions %>% 
+ rsq(truth = observed, estimate = predicted)
+
+numeric_predictions %>% 
+ rmse(truth = observed, estimate = predicted)
+```
+
+These can also be combined into a _metric set_. A new function that produces multiple metrics is created: 
+
+```{r chapter-5-metric-set}
+reg_stats <- metric_set(rsq, rmse)
+
+numeric_predictions %>% 
+ reg_stats(truth = observed, estimate = predicted)
+```
+
+
+For a list of performance metrics in `r pkg(yardstick)`, see the [reference page](https://yardstick.tidymodels.org/reference/index.html). 
+

@@ -1,0 +1,200 @@
+# (PART\*) Classification Models {-} 
+
+# Measuring Performance in Classification Models
+
+```{r chapter-11-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(tidymodels)
+library(patchwork)
+library(probably)
+```
+
+
+:::rmdrefs
+There is a good deal of overlap in the materials in this chapter and Chapter 9 of [_Tidy Models with R_](https://www.tmwr.org/performance.html#binary-classification-metrics). 
+:::
+
+The R packages used in this chapter are: `r pkg_text(c("tidymodels", "probably", "RColorBrewer", "patchwork"))`. To demonstrate, the built-in data sets `two_class_example` are used for two-class systems and multi-class cases, respectively. 
+
+```{r chapter-11-data}
+library(tidymodels)
+tidymodels_prefer()
+
+two_class_example %>% head()
+
+hpc_cv %>% head()
+```
+
+tidymodels expects hard class predictions to always be encoded as R factors. The same is also true of the observed class labels. Both the observed and predicted classes should also have the same factor levels. 
+
+## Class Predictions
+
+There are currently no tools for probability calibration, but this are on the short-term roadmap. 
+
+When there are two classes, an easy method for plotting the data is to use a histogram for each true class: 
+
+```{r chapter-11-fig-03}
+ggplot(two_class_example, aes(x = Class1)) +
+    geom_histogram(bins = 30) + 
+    facet_wrap(~ truth, labeller = labeller(truth = label_both))
+```
+
+For individual samples, the heatmap of class probabilities shown in Figure 4 is reproduced here for 20 randomly chosen data points: 
+
+```{r chapter-11-fig-04}
+# Emulate the colors from APM
+heat_cols <- colorRampPalette(c("#FFFFFF", RColorBrewer::brewer.pal(9, "BuPu")))
+
+set.seed(1101)
+hpc_cv %>% 
+ # Sample the data by class
+ group_by(obs) %>% 
+ slice_sample(n = 5) %>% 
+ ungroup() %>% 
+ # Make an integer for the y-axis
+ mutate(sample_number = row_number()) %>% 
+ select(obs, sample_number, VF:L) %>% 
+ # Stack the probabilities into a single column
+ pivot_longer(cols = c(VF:L), names_to = "class", values_to = "probability") %>% 
+ ggplot(aes(x = class, y = sample_number, fill = probability)) +
+ geom_raster() + 
+ scale_fill_gradientn(colors = heat_cols(16), limits = 0:1)
+```
+
+The `r pkg(probably)` package has functions to enact equivocal zones. The `make_two_class_pred()` creates a region where data inside the zone are judged to be equivocal. In the code below, the new column `with_zone` is not a factor but has class `"class_pred"` that emulates a factor but the levels do not include the equivocal label. 
+
+```{r chapter-11-eq-zones}
+library(probably)
+
+lvls <-  levels(two_class_example$truth)
+
+two_class_eqz <-
+ two_class_example %>%
+ mutate(with_zone = make_two_class_pred(Class1, lvls, buffer = 0.05))
+
+class(two_class_eqz$with_zone)
+levels(two_class_eqz$with_zone)
+unique(two_class_eqz$with_zone)
+
+two_class_eqz %>% 
+ group_by(truth, with_zone) %>% 
+ count()
+```
+
+A similar function exists for problems with more than two classes. There is more information in the [`r pkg(probably)` package vingette](https://probably.tidymodels.org/articles/equivocal-zones.html). 
+
+## Evaluating Predicted Classes
+
+Confusion matrices are create by the `conf_mat()` function: 
+
+```{r chapter-11-confusion}
+hpc_cv %>% conf_mat(obs, pred)
+```
+
+:::rmdcarrot
+tidymodels packages are more modular than `r pkg(caret)`. For example, the confusion matrix function in does many things: shows the cross-tabulation, computes overall statistics, and statistics for each class. In tidymodels, there are separate functions for each of these results. 
+:::
+
+Multi-class data follow the same syntax. There is an `autoplot()` function to visualize the results. There are two different types of plots: 
+
+```{r chapter-11-confusion-plots, fig.height=4}
+library(patchwork)
+
+hpc_confusion <- hpc_cv %>% conf_mat(obs, pred) 
+
+(autoplot(hpc_confusion) + ggtitle("mosaic plot")) + 
+ (autoplot(hpc_confusion, type = "heatmap") + ggtitle("heatmap"))
+```
+
+There are individual functions for each performance metric (e.g., `accuracy()`, etc.). These can be combined into a single function (similar to the regression case). 
+
+```{r chapter-11-class-metric-set}
+class_measures <- metric_set(accuracy, kap, mcc)
+
+hpc_cv %>% 
+ class_measures(obs, estimate = pred)
+```
+
+Importantly, the argument for the predicted class values _must be named_. 
+
+These functions respect grouped data frames and produce statistics for each group: 
+
+```{r chapter-11-class-metric-set-grouped}
+hpc_cv %>% 
+ group_by(Resample) %>% 
+ class_measures(obs, estimate = pred)
+```
+
+There are specific functions for two-class data sets (pun intended):
+
+```{r chapter-11-two-class-metric-set}
+two_class_measures <- metric_set(sensitivity, specificity, j_index)
+
+two_class_example %>% 
+ two_class_measures(truth, estimate = predicted)
+```
+
+These _assume the first factor level is the event of interest_. The functions, and metric sets, have arguments called `event_level` that change this default: 
+
+```{r chapter-11-second-level}
+two_class_example %>% 
+ two_class_measures(truth, estimate = predicted, event_level = "second")
+```
+
+There are multi-class techniques for these two-class metrics. See the [`r pkg(yardstick)` package vingette](https://yardstick.tidymodels.org/articles/multiclass.html) on the subject. 
+
+`r pkg(probably)` contains a function that can be helpful for finding an appropriate threshold to convert a class probably to a hard class prediction (when there are two classes): 
+
+```{r chapter-11-threshold}
+two_class_example %>% 
+ threshold_perf(truth, Class1, thresholds = (4:8)/8)
+```
+
+
+## Evaluating Class Probabilities
+
+`r pkg(yardstick)` also contains functions that use the class probabilities as inputs. For example, the area under the ROC curve can be computed using:
+
+```{r chapter-11-roc-curve-auc}
+two_class_example %>% 
+ roc_auc(truth, Class1)
+```
+
+The second argument should be the column with the appropriate class probabilities (for the event of interest). This does _not have to be named_. There is a function that computes the entire curve and a nice `autoplot()` method for visualization: 
+
+```{r chapter-11-fig-06}
+example_roc <- 
+ two_class_example %>% 
+ roc_curve(truth, Class1)
+
+example_roc
+
+autoplot(example_roc)
+```
+
+:::rmdcarrot
+The curves in _APM_ labeled as _lift curves_ are called _gain curves_ in `r pkg(yardstick)` and operate similarly.
+:::
+
+```{r chapter-11-fig-7}
+example_gain <- 
+ two_class_example %>% 
+ gain_curve(truth, Class1)
+
+example_gain
+
+autoplot(example_gain)
+```
+
+Both of these functions respect groups. 
+
+Metric sets can contain metrics that are for hard and soft class probabilities: 
+
+```{r chapter-11-mixed}
+more_stats <- metric_set(roc_auc, accuracy)
+
+# Both arguments are needed and the hard class predictions 
+# needs to be a named argument
+two_class_example %>% 
+ more_stats(truth, Class1, estimate = predicted)
+```

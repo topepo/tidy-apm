@@ -1,0 +1,62 @@
+Package: tidy-apm
+Title: A tidymodels companion to "Applied Predictive Modeling"
+Version: 0.0.1.9000
+Authors@R: 
+    person(given = "Max",
+           family = "Kuhn",
+           role = c("aut", "cre"),
+           email = "max@rstudio.com",
+           comment = c(ORCID = "0000-0003-2402-136X"))
+License: CC BY 4.0
+URL: https://github.com/topepo/tidy-apm
+Depends: 
+    R (>= 4.0.0)
+Imports:
+    AppliedPredictiveModeling,
+    baguette,
+    bookdown,
+    broom,
+    conflicted,
+    corrplot,
+    corrr,
+    Cubist,
+    dials,
+    dplyr,
+    e1071,
+    earth,
+    finetune,
+    ggforce,
+    ggplot2,
+    glmnet,
+    janitor,
+    kernlab,
+    kknn,
+    knitr,
+    lobstr,
+    mixOmics,
+    modeldata,
+    nnet,
+    parsnip (>= 0.1.6.9000),
+    patchwork,
+    purrr,
+    QSARdata,
+    ranger,
+    RColorBrewer,
+    recipes,
+    rpart,
+    rsample,
+    rules,
+    sessioninfo,
+    tibble,
+    tidymodels,
+    tidyr,
+    tune,
+    workflows,
+    workflowsets (>= 0.0.0.9001),
+    xgboost,
+    xrf,
+    yardstick
+Remotes:
+    tidymodels/parsnip
+biocViews: mixOmics
+Encoding: UTF-8

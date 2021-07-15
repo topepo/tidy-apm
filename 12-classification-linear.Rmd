@@ -1,0 +1,57 @@
+# Discriminant Analysis and Other Linear Classification Models
+
+```{r chapter-12-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(MASS)
+library(mixOmics)
+library(plsmod)
+library(glmnet)
+library(tidymodels)
+library(workflowsets)
+library(discrim)
+
+cores <- parallel::detectCores()
+if (!grepl("mingw32", R.Version()$platform)) {
+ library(doMC)
+ registerDoMC(cores = cores)
+} else {
+  library(doParallel)
+  cl <- makePSOCKcluster(cores)
+  registerDoParallel(cl)
+}
+
+source("extras/overlay_roc_curves.R")
+```
+
+
+The R packages used in this chapter are: `r pkg_text(c("tidymodels", "MASS", "discrim", "glmnet",
+"mixOmics", "plsmod"))`. 
+
+## Case Study: Predicting Successful Grant Applications
+
+These data are supplied in the GitHub repository. The object `grants_testing` holds the test set while `grants_other` contains the data used for modeling and initial evaluation. 
+
+We recreated the same split used in _APM_ here. However, the nature of this data splitting scheme is fairly irregular. For this reason, a non-standard `r pkg(rsample)` method was used; the results are the same as those produced by a more standard application of `initial_split()`. The code to create the `grants_split` object is found in [`extras/grants_splits.R`](https://github.com/topepo/tidy-apm/tree/main/extras/grants_splits.R).   
+
+```{r chapter-12-data}
+library(tidymodels)
+tidymodels_prefer()
+data(grants)
+
+ls(pattern = "grants")
+
+load("RData/grants_split.RData")
+
+grants_split
+nrow(grants_test)
+```
+`grants_split` is a validation-type resampling object. As noted in _APM_, $n = `r nrow(analysis(grants_split$splits[[1]]))`$ grants is use for model fitting while we predict $n = `r nrow(assessment(grants_split$splits[[1]]))`$ grants to measure model performance. We create the final model using both of these data sets. The final test set contains $n = `r nrow(grants_test)`$ grants are used as the final test set assessment.  
+
+
+```{r chapter-12-teardown, include = FALSE}
+if (grepl("mingw32", R.Version()$platform)) {
+ stopCluster(cl)
+} 
+```
+
+

@@ -1,0 +1,243 @@
+# (PART\*) General Strategies {-}
+
+# A Short Tour of the Predictive Modeling Process
+
+```{r chapter-02-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(tidymodels)
+library(AppliedPredictiveModeling)
+library(patchwork)
+
+pkg_list <- c("patchwork", "AppliedPredictiveModeling", "tidymodels", "earth")
+```
+
+This chapter gives a re-translation of the _APM_ Chapter 2. Subsequent chapters will demonstrate the differences between `r pkg(caret)` and tidymodels. The R package used in this chapter are `r pkg_text(pkg_list)`.
+
+The data are in several data frames contained in `r pkg(AppliedPredictiveModeling)`. The analysis in this chapter only uses the 2010 and 2011 data. 
+
+```{r chapter-02-data}
+library(tidymodels)
+tidymodels_prefer()
+
+data(FuelEconomy, package = "AppliedPredictiveModeling")
+```
+
+The data frames `cars2010` and `cars2011` are used in these analyses. 
+
+
+## Working with the data
+
+Let's plot the relationship between engine displacement and fuel efficiency of all 2010 model year vehicles and new 2011 car lines: 
+
+```{r chapter-02-fig-01, fig.height=4.5}
+cars2010 %>% 
+  mutate(Year = "2010 Model Year") %>% 
+  bind_rows(
+    cars2011 %>% 
+      mutate(Year = "2011 Model Year")
+  ) %>% 
+  ggplot(aes(x = EngDispl, y = FE)) + 
+  geom_point(alpha = .3) + 
+  facet_wrap(~ Year) + 
+  xlab("Engine Displacement") + 
+  ylab("Fuel Efficiency (MPG)")
+```
+
+## Resampling the training set
+
+Create resampling folds for the 2010 data (described in more detail in Section \@ref(k-fold-cross-validation)): 
+
+```{r chapter-02-folds}
+set.seed(201)
+folds_2010 <- vfold_cv(cars2010)
+```
+
+## A simple linear regression model
+
+Fit a linear regression model with a single linear term for engine displacement, a model specification is created (Section \@ref(case-study-credit-scoring)) then evaluated across the resamples (Section \@ref(choosing-between-models)):
+
+```{r chapter-02-linear-reg}
+# Setup the model type and use `lm()` to fit the model: 
+lm_spec <- linear_reg() %>% set_engine("lm")
+
+# Create a control object that will save the out-of-sample predictions. 
+ctrl <- control_resamples(save_pred = TRUE)
+
+# Perform 10-fold cross-validation on the linear regression
+lm_lin_resamples <- 
+  lm_spec %>% 
+  fit_resamples(FE ~ EngDispl, resamples = folds_2010, control = ctrl)
+
+# Fit the linear model on the 2010 data
+lm_lin_fit <- lm_spec %>% fit(FE ~ EngDispl, data = cars2010)
+
+tidy(lm_lin_fit)
+```
+
+We'll make a function for creating plots of the predicted line and the observed versus predicted results to use mutiple times: 
+
+```{r chapter-02-diagnostic-function}
+fuel_plots <- function(resamples, fit) {
+  library(patchwork)
+  
+  pred_line <- 
+    predict(fit, cars2010) %>% 
+    bind_cols(cars2010) %>% 
+    arrange(EngDispl)
+  
+  profile_plot <- 
+    cars2010 %>% 
+    ggplot(aes(x = EngDispl, y = FE)) + 
+    geom_point(alpha = .3) + 
+    geom_line(data = pred_line, aes(y = .pred), col = "red") +
+    xlab("Engine Displacement") + 
+    ylab("Fuel Efficiency (MPG)")
+  
+  obs_vs_pred <- 
+    # Collate the out-of-sample predictions from resampling:
+    collect_predictions(resamples) %>% 
+    # .pred is the standard name of predictions from a 
+    # regression model.
+    ggplot(aes(x = FE, y = .pred)) + 
+    geom_abline(lty = 2) + 
+    geom_point(alpha = .3) + 
+    coord_obs_pred() + 
+    xlab("Observed") + 
+    ylab("Predicted")
+  
+  profile_plot + obs_vs_pred
+}
+```
+
+The training set data and its associated predictions are used to understand how well the model works: 
+
+```{r chapter-02-fig-02}
+fuel_plots(lm_lin_resamples, lm_lin_fit)
+```
+
+The resampled RMSE and other quality of fit diagnostics for the model(s) can be computed via `collect_metrics()`:. 
+
+```{r chapter-02-linear-reg-rmse}
+collect_metrics(lm_lin_resamples)
+```
+
+## A linear regression model with a quadratic term
+
+Now we'll add a quadratic term to the linear model using the formula method.  
+
+```{r chapter-02-linear-reg-quad}
+lm_quad_resamples <- 
+  lm_spec %>% 
+  fit_resamples(FE ~ EngDispl + I(EngDispl^2), resamples = folds_2010, control = ctrl)
+
+lm_quad_fit <- lm_spec %>% fit(FE ~ EngDispl + I(EngDispl^2), data = cars2010)
+tidy(lm_quad_fit)
+```
+
+Quality of fit diagnostics for the quadratic regression model (using the training set):
+
+```{r chapter-02-fig-03}
+fuel_plots(lm_quad_resamples, lm_quad_fit)
+```
+
+Adding the quadratic term causes the resampled RMSE decreased: 
+
+```{r chapter-02-linear-reg-quad-rmse}
+collect_metrics(lm_quad_resamples)
+```
+
+## Multivariate adaptive regression spline model
+
+To tune a MARS model to the data, evaluating a model with two to five features, is accomplished using the `tune_grid()` function:
+
+```{r chapter-02-mars, message = FALSE}
+mars_spec <- 
+  mars(num_terms = tune(), prune_method = "none") %>% 
+  set_engine("earth") %>% 
+  set_mode("regression")
+
+# Save the out-of-sample predictions
+ctrl <- control_grid(save_pred = TRUE)
+
+mars_tune <-
+  mars_spec %>%
+  tune_grid(
+    FE ~ EngDispl,
+    resamples = folds_2010,
+    control = ctrl,
+    grid = tibble(num_terms = 2:5)
+  )
+```
+
+The cross-validation profile for the MARS tuning parameter:
+
+```{r chapter-02-fig-04, fig.height=4.5}
+autoplot(mars_tune, metric = "rmse")
+```
+
+Selecting the best tuning parameters (see Section \@ref(choosing-final-tuning-parameters)): 
+
+```{r chapter-02-mars-paramters}
+# Show the top results:
+show_best(mars_tune, metric = "rmse")
+
+# Pick the numerically best:
+mars_param <- select_best(mars_tune, metric = "rmse")
+mars_param
+
+# Update the model to substitute the value of `tune()` with
+# the chosen value, then fit the model. 
+mars_fit <- 
+  mars_spec %>% 
+  finalize_model(mars_param) %>% 
+  fit(FE ~ EngDispl, data = cars2010)
+
+# The fitted MARS terms:
+cat(format(mars_fit$fit, digits = 3))
+```
+
+```{r chapter-02-mars-cuts, include = FALSE}
+mars_cuts <- unique(mars_fit$fit$cuts[, "EngDispl"])
+mars_cuts <- mars_cuts[mars_cuts > 0]
+mars_cut_text <- knitr::combine_words(sort(mars_cuts))
+```
+
+The MARS model creates several linear regression fits with change points at `r mars_cut_text` L: The plots show a good fit:
+
+```{r chapter-02-fig-05}
+fuel_plots(mars_tune, mars_fit)
+```
+
+## Test set results
+
+We can evaluate the best two models on the test set. It is preferable to to create a split object using [`initial_split()`](https://www.tmwr.org/splitting.html#splitting-methods) and the put the [`last_fit()`](https://www.tidymodels.org/start/case-study/#last-fit) function. However, since we have separate data frames, we'll use `augment()`: 
+
+```{r chapter-02-fig-06, fig.height=4.5}
+# Predict the test set using the two best models
+
+lm_quad_test_res <- 
+  lm_quad_fit %>% 
+  augment(cars2011) %>% 
+  mutate(model = 'Quadratic Regression')
+
+mars_test_res <- 
+  mars_fit %>% 
+  augment(cars2011) %>% 
+  mutate(model = 'MARS') 
+
+lm_quad_test_res  %>% 
+  bind_rows(mars_test_res) %>% 
+  ggplot(aes(x = EngDispl, y = FE)) + 
+  geom_point(alpha = .5) + 
+  geom_line(aes(y = .pred), col = "red") +
+  facet_wrap(~ model) +
+  xlab("Engine Displacement") + 
+  ylab("Fuel Efficiency (MPG)")
+```
+
+The test set RMSE statistics:
+
+```{r chapter-02-test-stats}
+lm_quad_test_res %>% rmse(FE, .pred)
+mars_test_res    %>% rmse(FE, .pred)
+```

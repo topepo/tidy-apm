@@ -1,0 +1,53 @@
+# Nonlinear Classification Models
+
+```{r chapter-13-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(nnet)
+library(kernlab)
+library(discrim)
+library(kknn)
+library(mda)
+library(klaR)
+library(tidymodels)
+library(workflowsets)
+
+cores <- parallel::detectCores()
+if (!grepl("mingw32", R.Version()$platform)) {
+ library(doMC)
+ registerDoMC(cores = cores)
+} else {
+  library(doParallel)
+  cl <- makePSOCKcluster(cores)
+  registerDoParallel(cl)
+}
+
+source("extras/overlay_roc_curves.R")
+```
+
+
+The R packages used in this chapter are: `r pkg_text(c("tidymodels", "nnet", "discrim", "earth",
+"kknn", "klaR", "kernlab"))`. 
+
+The data objects from the previous chapter are also required here: 
+
+```{r chapter-13-data}
+library(tidymodels)
+tidymodels_prefer()
+data(grants)
+
+ls(pattern = "grants")
+
+load("RData/grants_split.RData")
+
+grants_split
+nrow(grants_test)
+```
+
+
+```{r chapter-13-teardown, include = FALSE}
+if (grepl("mingw32", R.Version()$platform)) {
+ stopCluster(cl)
+} 
+```
+
+

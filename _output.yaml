@@ -1,0 +1,12 @@
+bookdown::gitbook:
+  css: [style.css, TMwR.css]
+  dev: svg
+  config:
+    toc:
+      collapse: section
+      before: |
+        <li><strong><a href="./">A tidymodels Companion to <i>Applied Predictive Modeling</i></a></strong></li>
+    edit:
+      link: https://github.com/topepo/tidy-apm/edit/master/%s
+      text: "Edit"
+    sharing: no

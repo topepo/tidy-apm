@@ -1,0 +1,12 @@
+# A Summary of Solubility Models
+
+
+```{r chapter-09-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(knitr)
+library(tidymodels)
+library(workflowsets)
+```
+
+In _APM_, this chapter gathers the results across all of the models created in Chapters 6, 7, and 8. It compares their performance metrics. We'll do the same here and introduce another R package. The R packages used in this chapter are: `r pkg_text(c("tidymodels", "rules", "Cubist", "workflowsets", "patchwork"))`. 
+

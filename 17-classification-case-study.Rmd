@@ -1,0 +1,35 @@
+# Case Study: Job Scheduling
+
+```{r chapter-17-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(tidymodels)
+
+cores <- parallel::detectCores()
+if (!grepl("mingw32", R.Version()$platform)) {
+ library(doMC)
+ registerDoMC(cores = cores)
+} else {
+  library(doParallel)
+  cl <- makePSOCKcluster(cores)
+  registerDoParallel(cl)
+}
+```
+
+The R packages used in this chapter are: `r pkg_text(c("tidymodels", "C50", "rpart", "baguette",
+"xgboost", "ranger"))`. 
+
+## Data Splitting and Model Strategy
+
+```{r chapter-17-hpc-data}
+library(tidyverse)
+library(workflowsets)
+
+data(hpc_data)
+```
+
+
+```{r chapter-17-teardown, include = FALSE}
+if (grepl("mingw32", R.Version()$platform)) {
+ stopCluster(cl)
+} 
+```

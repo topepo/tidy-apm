@@ -1,0 +1,69 @@
+# Remedies for Severe Class Imbalance
+
+```{r chapter-16-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(tidymodels)
+
+cores <- parallel::detectCores()
+if (!grepl("mingw32", R.Version()$platform)) {
+ library(doMC)
+ registerDoMC(cores = cores)
+} else {
+  library(doParallel)
+  cl <- makePSOCKcluster(cores)
+  registerDoParallel(cl)
+}
+```
+
+
+The R packages used in this chapter are: `r pkg_text(c("tidymodels", "C50", "rpart", "baguette",
+"xgboost", "ranger"))`. 
+
+
+## Case Study: Predicting Caravan Policy Ownership
+
+```{r chapter-16-data}
+library(tidymodels)
+tidymodels_prefer()
+
+load("RData/tic_data.RData")
+
+n <- nrow(tic_data)
+
+# Split into evaluation set and other
+set.seed(1601)
+tic_split_eval <- initial_split(tic_data, strata = class, prop = 983/n)
+
+tic_eval <- training(tic_split_eval)
+
+# Now split into a training and test set
+set.seed(1602)
+tic_split <- initial_split(testing(tic_split_eval), 
+                           strata = class, prop = 6877/(6877 + 1962))
+
+
+tic_training <- training(tic_split)
+tic_testing  <-  testing(tic_split)
+
+set.seed(1603)
+tic_folds <- vfold_cv(tic_training, strata = class)
+```
+
+## The Effect of Class Imbalance
+
+
+## Model Tuning
+
+## Alternate Cutoffs
+
+
+## Adjusting Prior Probabilities
+
+
+## Unequal Case Weights
+
+
+## Sampling Methods
+
+
+## Cost-Sensitive Training

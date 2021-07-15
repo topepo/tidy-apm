@@ -1,0 +1,48 @@
+# Case Study: Compressive Strength of Concrete Mixtures
+
+```{r chapter-10-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(tidymodels)
+library(workflowsets)
+library(baguette)
+library(rules)
+library(janitor)
+library(finetune)
+
+cores <- parallel::detectCores()
+if (!grepl("mingw32", R.Version()$platform)) {
+ library(doMC)
+ registerDoMC(cores = cores)
+} else {
+  library(doParallel)
+  cl <- makePSOCKcluster(cores)
+  registerDoParallel(cl)
+}
+```
+
+This case study examines a large number of models that predict a property of concrete mixtures. The analysis here will be similar to the _APM_ approach but will illustrate two techniques: using workflow sets to launch models and efficient triage of models using race methods. This chapter uses a lot of R packages: `r pkg_text(c("tidymodels", "rules", "Cubist", "workflowsets", "AppliedPredictiveModeling", "glmnet", "nnet", "earth", "kernlab", "kknn", "baguette", "rpart", "ranger", "xgboost"))`.
+
+There are two versions of the data. Like _APM_, we'll use the version where the concrete ingredients are represented as proportions in a mixture. There are some replicated mixtures so we create a distinct set of mixtures and average the outcome data across replicates.  
+
+```{r chapter-10-data-prep}
+data("concrete", package = "AppliedPredictiveModeling")
+
+mixture_means <- 
+ mixtures %>% 
+ clean_names() %>% 
+ group_by(cement, blast_furnace_slag, fly_ash, superplasticizer, 
+          coarse_aggregate, fine_aggregate, water, age) %>% 
+ summarize(
+  compressive_strength = mean(compressive_strength), 
+  .groups = "drop"
+ )
+```
+
+
+```{r chapter-10-teardown, include = FALSE}
+if (grepl("mingw32", R.Version()$platform)) {
+ stopCluster(cl)
+} 
+```
+
+

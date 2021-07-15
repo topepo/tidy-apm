@@ -1,0 +1,26 @@
+new_session: yes
+
+rmd_files: [
+  "index.Rmd",
+  "01-introduction.Rmd",
+  "02-tour.Rmd",
+  "03-preprocess.Rmd",
+  "04-tuning.Rmd",
+  "05-regression-performance.Rmd",
+  "06-regression-linear.Rmd",
+  "08-regression-trees.Rmd",
+  "09-regression-summary.Rmd",
+  "10-regression-case-study.Rmd",
+  "11-classification-performance.Rmd",
+  "12-classification-linear.Rmd",
+  "13-classification-nonlinear.Rmd",
+  "14-classification-trees.Rmd",
+  "15-classification-summary.Rmd",
+  "16-classification-imbalance.Rmd",
+  "17-classification-case-study.Rmd",
+  "18-importance.Rmd",
+  "19-feature-selection.Rmd",
+  "20-other-factors.Rmd"
+]
+
+before_chapter_script: "_common.R"

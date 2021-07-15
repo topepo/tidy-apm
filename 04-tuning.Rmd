@@ -1,0 +1,383 @@
+# Over-Fitting and Model Tuning
+
+```{r chapter-04-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(caret)
+library(tidymodels)
+library(tidyposterior)
+library(doMC)
+registerDoMC(cores = 10)
+
+pkg_list <- c("caret", "kernlab", "tidymodels", "tidyposterior")
+```
+
+The R packages used in this chapter are `r pkg_text(pkg_list)`. 
+
+:::rmdrefs
+For data splitting, [Chapter 5](https://www.tmwr.org/splitting.html) of `tmwr.org` describes details for conducting an initial split of the data. 
+
+[Chapter 10](https://www.tmwr.org/resampling.html) focuses on resampling methods with `r pkg(rsample)`. 
+:::
+
+
+The ancient German Credit data are used in this chapter. There are a few versions of these data in R packages. In _APM_, this code was used to create the data set: 
+
+```{r chapter-04-credit-data}
+library(caret)
+data(GermanCredit)
+
+german_credit <- 
+ GermanCredit %>% 
+ select(-CheckingAccountStatus.lt.0, -SavingsAccountBonds.lt.100,
+        -EmploymentDuration.lt.1, -EmploymentDuration.Unemployed,
+        -Personal.Male.Married.Widowed, -Property.Unknown,
+        -Housing.ForFree)
+```
+
+## Data Splitting
+
+
+The tidymodels analog to `caret::createDataPartition()` is `rsample::initial_split()`. This function creates a split object that contains the row indices for the training and test sets. 
+
+```{r chapter-04-initial-split}
+library(tidymodels)
+tidymodels_prefer()
+
+set.seed(401)
+split <- initial_split(german_credit, strata = Class, prop = 0.8)
+```
+
+There are special functions that create those data sets:
+
+```{r chapter-04-initial-split-df}
+german_credit_train <- training(split)
+german_credit_test  <- testing(split)
+```
+
+The `strata` argument is optional and follows the same approach as `r pkg(caret)`. 
+
+
+## Resampling Techniques
+
+Functions for resampling are also in the `r pkg(rsample)` package. We try to standardize on different nomenclature for resampling. From [FES](https://bookdown.org/max/FES/resampling.html): 
+
+> ... a resampling scheme generates a subset of the data to be used for modeling and another that is used for measuring performance. Here, we will refer to the former as the “analysis set” and the latter as the "assessment set". They are roughly analogous to the training and test sets
+
+The intention is to avoid confusion by reserving the term "training set" and "test set" for the initial split and "analysis set" and "assessment sets" for the corresponding resampling partition  
+
+:::rmdcarrot
+`caret` recreates the resampling indicators for each call to `train()`. In tidymodels, we create an `r pkg(rsample)` object and pass it in as an argument to functions. 
+
+This makes it easier to maintain consistent resamples. 
+:::
+
+
+We walk though how to make different resampling schemes with `r pkg(rsample)`. In practice, the common object structure makes these objects interchangeable from one another when used in other tidymodels functions. 
+
+### k-Fold Cross-Validation
+
+:::rmdnotequal
+Since these are different functions that use different random numbers, we should not expect the same results as those in _APM_. 
+:::
+
+In tidymodels, the letter _V_ is used to denote folds (instead of _K_, which is used for nearest-neighbor models). The `r pkg(rsample)` functions use to create resampling schemes all work fairly similarly. Each takes a data frame as an argument (for the training set data). This approach doesn't allow cases where the predictors and outcomes are contained in different objects. 
+
+The `vfold_cv()` function creates a tibble that has _V_ rows. Each row corresponds to a different resample of the training set. For example, to make an object with 10 folds that uses stratified sampling: 
+
+```{r chapter-04-cv}
+set.seed(402)
+cv_10_fold <- vfold_cv(german_credit_train, v = 10, strata = Class)
+cv_10_fold
+```
+
+The `splits` column contains the indies for the rows of the training set that are used for creating the model (and those used for performance estimation). When one element is printed: 
+
+```{r chapter-04-split}
+cv_10_fold$splits[[1]]
+```
+
+we see how many data points are used for each task. 
+
+There are higher level APIs that work with the split objects. However, to manually extract the data, the analysis and assessment functions are used: 
+
+```{r chapter-04-split-data}
+analysis(cv_10_fold$splits[[1]]) %>% dim()
+assessment(cv_10_fold$splits[[1]]) %>% dim()
+```
+
+Each split object contains the original data but, despite this, no extra copies in memory exist. 
+
+For repeated cross-validation, use the `repeats` argument: 
+
+```{r chapter-04-repeat-cv}
+set.seed(402)
+cv_10_fold_reps <- vfold_cv(german_credit_train, v = 10, repeats = 5, strata = Class)
+cv_10_fold_reps
+```
+
+Note that there are now two identification columns and `r nrow(cv_10_fold_reps)` rows. 
+
+Finally, leave-one-cross-validation folds can be created. However, this resampling method is generally deprecated and most tidymodels functions no note support it. 
+
+```{r chapter-04-loo}
+cv_loo <- loo_cv(german_credit_train)
+nrow(cv_loo) == nrow(german_credit_train)
+```
+
+### Repeated Random Splits
+
+To use "leave-group-out" cross-validation, a.k.a. Monte Carlo cross-validation, use the `mc_cv()` function. The main arguments are `times` (the number of resamples) and `prop` (what proportion of data  used for modeling). There is also an optional stratification argument (`strata`). For example: 
+
+```{r chapter-04-mc-cv}
+set.seed(402)
+cv_mc <- mc_cv(german_credit_train, times = 50, prop = 0.8)
+```
+
+### The Bootstrap
+
+Similarly, the `bootstraps()` function creates bootstrap resamples. Each produces an analysis set that is the same size as the training set. The number of samples in the assessment set varies. 
+
+```{r chapter-04-boot}
+set.seed(402)
+boots <- bootstraps(german_credit_train, times = 50)
+map_int(boots$splits, ~ nrow(assessment(.x))) %>% summary()
+```
+
+
+##  Case Study: Credit Scoring
+
+This section tuned the support vector machine (SVM) model using different resampling methods. We'll replicate this analysis and reproduce Figure 4.10.  
+
+As shown in Chapter 2, grid search is available in the `r pkg(tune)` package via `tune_grid()`. This is does 90% of the functionality of  `caret::train()`. 
+
+:::rmdcarrot
+If you have not already created them, `train()` makes resamples and tuning grids. It fits the submodels for each resample, chooses the best values, and fit the final model. 
+
+For the most part, `tune_grid()` does everything up to automatically picking the best parameters and fitting the final model. In tidymodels, there are separate functions for these last two tasks. 
+:::
+
+To start, we'll need to define the model and the _computational engine_. The former defines the _structural model_. The engine specification indicates what estimation method and/or software package will fit the model. The _mode_ sets the type of prediction that is made (classification, for these data). 
+
+```{r chapter-04-svm-model}
+svm_radial <- 
+ svm_rbf(cost = tune()) %>% 
+ set_engine("kernlab") %>% 
+ set_mode("classification")
+```
+
+`r pkg(parsnip)` models are created with a _default engine_ which, in this case, is the `r pkg(kernlab)` package. This simpler code is equivalent: 
+
+```{r chapter-04-svm-model-default}
+svm_radial <- 
+ svm_rbf(cost = tune()) %>% 
+ set_mode("classification")
+```
+
+The main parameters to the model function are those most likely to be tuned. In the example above, we slate the the SVM  cost parameter for optimization by giving it a value of `tune()`. If other arguments require tuning or specification, they can be passed to `set_engine()`. In `r pkg(caret)` these other arguments would be passed to the `...`. 
+
+In _APM_, a near-zero variance filter was used to remove and spares and unbalanced predictors. A recipe can enable that operation and then a workflow can bind the model and recipe together: 
+
+```{r chapter-04-svm-wflow}
+german_credit_rec <- 
+ recipe(Class ~ ., data = german_credit_train) %>% 
+ step_nzv(all_predictors())
+
+svm_wflow <- 
+ workflow() %>% 
+ add_recipe(german_credit_rec) %>% 
+ add_model(svm_radial)
+```
+
+As with `r pkg(caret)`, the tidymodels tuning functions can create a grid for you or you can pass in specific submodels in a data frame. Here, we'll create a grid of values to pass to `tune_grid()`. 
+
+```{r chapter-04-svm-grid}
+svm_grid <- tibble(cost = 2^ seq(-2, 7, length = 10))
+```
+
+:::rmdcarrot
+With `train()`, a _regular grid_ is created if the `tuneLength` argument is invoked. The `search` argument of `trainControl()` can also produce a random grid. 
+
+In `tune_grid()`, a type of space-filling experimental design will create the grid.  These designs are better and more economical for screening tuning parameters. It uses random numbers, so set the random number seed before calling `tune_grid()` with the `grid = <integer>` option. 
+
+A predefined regular grid can be produced by the `grid_regular()` function if needed. 
+:::
+
+The code to tune these parameters with 10-fold cross-validation, using overall accuracy as the metric, is: 
+
+
+```{r chapter-04-svm-tune-10-fold, message = FALSE}
+set.seed(403)
+svm_tune <- svm_wflow %>% tune_grid(cv_10_fold, grid = svm_grid)
+svm_tune
+```
+
+Many of these columns are list column and might appear a little intimidating. The new columns are: 
+
+* `.metrics`: the performance statistics for each tuning parameter combination for the current resample. The tibble has 20 rows since the function calculates two statistics for each tuning parameter combination. 
+
+* `.notes`: a collection of any warning or error messages that occurred in this resample (if any). 
+
+To get the performance profile for this model, there are several high-level functions that allow for easy extraction and sorting: 
+
+```{r chapter-04-svm-stats}
+collect_metrics(svm_tune)
+show_best(svm_tune, metric = "accuracy")
+```
+
+These results are in a _tidy format_; adding more metrics increases the number of rows in the resulting data frame. 
+
+:::rmdcarrot
+If the metric argument is ignored, tune_grid computes default performance statistics. 
+
+For regression, these are RMSE and R<sup>2</sup> (same as `r pkg(caret)`). 
+
+For classification, is measures the area under the ROC curve and overall accuracy. When more than two classes are in the data, it uses a multiclass ROC computation.   
+:::
+
+To visualize these results, use the `autoplot()` function to show the relationship between performance and the tuning parameter(s). 
+
+```{r chapter-04-fig-09}
+autoplot(svm_tune, metric = "accuracy")
+```
+
+Note that the x-axis is automatically on the log(2) scale since the system understands that the cost parameter is setup to use this scale. 
+
+A few notes on `tune_grid()`: 
+
+* Parallel processing is enabled in the same way as `r pkg(caret)`; use one of the `r pkg(foreach)` backend packages (e.g. `r pkg(doParallel)`, etc) before calling the function. 
+
+* To save the out-of-sample predictions, the `save_pred = TRUE` option will add another list column to the output called predictions. Another accessor function, `collect_predictions()`, will return a nice tibble of results. 
+
+* The types of predictions that are calculated  are the ones used by the performance metrics. For example, if we request accuracy and sensitivity, the class probability predictions are not created (since they are not needed). 
+
+* Unlike `r pkg(caret)`, the out-of-sample predictions are saved for all of the tuning parameter combinations that were evaluated. 
+
+* As previously mentioned, `tune_grid()` does not automatically pick the final tuning parameters nor does it create the last model using those parameter values and the entire training set. 
+
+Finally, it should be noted that there are other methods of finding optimal parameters besides grid search. The `r pkg(tune)` package contains an iterative search procedure, Bayesian optimization, that finds new parameter settings to test as the iterations proceed. 
+
+:::rmdrefs
+To learn more about Bayesian optimization and other iterative methods, [Chapter 14]() of `tmwr.org` goes into details on these methods. 
+:::
+
+When there are _no tuning parameters_, the `fit_resamples()` function is used and has almost the exact same syntax and output format. 
+
+## Choosing Final Tuning Parameters
+
+There are several functions that choose the best parameter results, depending on your criterion. To select the numerically best results: 
+
+
+```{r chapter-04-svm-best}
+best_acc <- select_best(svm_tune, metric = "accuracy")
+best_acc
+```
+
+Note that the return argument is a tibble. If we desire different tuning parameter results, we can construct a tibble manually. 
+
+Selecting the best results within a tolerance of the numerically best results can also occur. Unlike `caret::tolerance()`, the user must provide a column (or columns) to sort the parameters by complexity (most simple to most complex):  
+
+```{r chapter-04-svm-tol, warning = FALSE}
+select_by_pct_loss(svm_tune, cost, metric = "accuracy", limit = 5)
+```
+
+This assumes that _smaller_ values of `cost` result in lower model complexity (which is the case). This might not be true for other parameters, such as the number of nearest (`neighbors`). In that case, we can use `desc(neighbors)` to find less complex models within a tolerance of the best results. 
+
+The API allows for any number of tuning parameters to be included. Their names can be added as un-named arguments to the function (but their order matters). 
+
+Similarly, the one-standard error rule function has a similar syntax: 
+
+```{r chapter-04-svm-1-se, warning = FALSE}
+select_by_one_std_err(svm_tune, cost, metric = "accuracy")
+```
+
+Once the best parameters have been selected, the original objects that contained the `tune()` placeholders can be _finalized_ by substituting the optimal values in place of `tune()`. The objects that require updating might be recipes, `r pkg(parsnip)` model specifications, or workflows. 
+
+Our SVM application used a workflow. The code to update the object inside the workflow is: 
+
+```{r chapter-04-svm-finalize}
+svm_wflow_final <- 
+   svm_wflow %>% 
+   finalize_workflow(best_acc)
+svm_wflow_final
+```
+
+If this model was our best result, the next step is to evaluate it on the test set. If we first used `intial_split()` to create the training and test sets, there is a nice function that will fit the model on the entire training set and evaluate it on the test set:
+
+```{r chapter-04-svm-final-fit}
+set.seed(404)
+svm_wflow_test <- 
+   svm_wflow_final %>% 
+   last_fit(split = split)
+svm_wflow_test
+
+# Test set results: 
+collect_metrics(svm_wflow_test)
+
+# The fitted workflow object: 
+svm_wflow_test$.workflow[[1]]
+```
+
+If a split object does not exist, the same steps can be emulated:
+
+```{r chapter-04-svm-final-fit-manual}
+set.seed(405)
+svm_wflow_fit <- fit(svm_wflow_final, german_credit_train)
+
+test_pred <- 
+  svm_wflow_fit %>% 
+  augment(german_credit_test)
+
+test_pred %>% accuracy(Class, .pred_class)
+```
+
+## Choosing Between Models
+
+Let's create the logistic regression fit described in _APM_. Since there is no model tuning, the `fit_resamples()` function is used. The output is very similar to those generated by `tune_grid()`.
+
+```{r chapter-04-logistic}
+logistic_wflow <- 
+ workflow() %>% 
+ add_recipe(german_credit_rec) %>% 
+ add_model(logistic_reg()) #<- "glm" is the default engine
+
+logistic_resamp <- logistic_wflow %>%  fit_resamples(cv_10_fold)
+collect_metrics(logistic_resamp)
+```
+
+_Currently_, there isn't a tidymodels analog to `caret::resamples()`. If we want to do a statistical hypothesis test to compare models, we can assemble the resamples: 
+
+```{r chapter-04-collect-resamples}
+# Best SVM results
+svm_accuracy <- 
+  svm_tune %>% 
+  # Get the accuracy values for each resample (instead of the mean)
+  collect_metrics(summarize = FALSE) %>% 
+  filter(.metric == "accuracy" & cost == 1) %>% 
+  select(id, svm = .estimate)
+
+# Logistic results: 
+logistic_accuracy <- 
+  logistic_resamp %>% 
+  collect_metrics(summarize = FALSE) %>% 
+  filter(.metric == "accuracy") %>% 
+  select(id, logistic = .estimate)
+
+accuracy_stats <- full_join(svm_accuracy, logistic_accuracy, by = "id")
+```
+
+Now that the data are collated, a simple t-test can be used: 
+
+```{r chapter-04-t-test}
+accuracy_stats %>% 
+  mutate(difference = svm - logistic) %>% 
+  pluck("difference") %>% 
+  t.test() %>% 
+  tidy()
+```
+
+
+:::rmdrefs
+Alternatively, a more sophisticated Bayesian analysis approach is available with the `r pkg(tidyposterior)` package. It creates a Bayesian model that compares the performance metrics. 
+
+See the [chapter in _Tidy Models with R_](https://www.tmwr.org/compare.html) on this subject. 
+:::

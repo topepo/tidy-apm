@@ -1,0 +1,416 @@
+# Linear Regression and Its Cousins
+
+```{r chapter-06-startup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(knitr)
+library(tidymodels)
+library(patchwork)
+library(plsmod)
+library(corrr)
+
+# to avoid startup messages
+library(mixOmics)
+library(MASS)
+library(rlang)
+library(vctrs)
+
+cores <- parallel::detectCores()
+if (!grepl("mingw32", R.Version()$platform)) {
+  library(doMC)
+  registerDoMC(cores = cores)
+} else {
+  library(doParallel)
+  cl <- makePSOCKcluster(cores)
+  registerDoParallel(cl)
+}
+```
+
+This chapter covers how to develop linear models for data sets where the outcome is a number. The R packages used in this chapter are: `r pkg_text(c("tidymodels", "patchwork", "corrr", "plsmod", "mixOmics", "glmnet"))`. 
+
+## Case Study: Quantitative Structure-Activity Relationship Modeling
+
+The data used in Chapters 6 through 9 are from computational chemistry. From _APM_: 
+
+> Tetko et al. (2001) and Huuskonen (2000) investigated a set of compounds with corresponding experimental solubility values using complex sets of de- scriptors. They used linear regression and neural network models to estimate the relationship between chemical structure and solubility. 
+
+The data are contained in the `r pkg(AppliedPredictiveModeling)` package but have been preprocessed into a better format. The required objects are contained in the file `solubility_data.RData`. The version of the data in `r pkg(AppliedPredictiveModeling)` are separated into objects for training and test as well as predictors and outcomes. Instead of four data objects, the data were collected into a single data frame called `solubility` and, using `r pkg(rsample)`, an initial split object was created (called `solubility_split`). This is used to create a training and test set that match those used in _APM_. A set of resampling indicators for 10-fold cross-validation is also created, although these are different than the ones used in _APM_. 
+
+```{r chapter-06-solubility-data}
+library(tidymodels)
+tidymodels_prefer()
+
+load("RData/solubility_data.RData")
+
+dim(solubility)
+
+solubility_split # <- Same split as APM
+
+solubility_train <- training(solubility_split)
+solubility_test  <- testing(solubility_split)
+
+# Different resamples than those used in APM
+set.seed(3267)
+solubility_folds <- vfold_cv(solubility_train, strata = solubility)
+```
+
+:::rmdnotequal
+In addition to different resamples, the predictor data that are used here have not been pre-transformed. A Yeo-Johnson transformation is applied within each resample. This should produce better resampling statistics than applying the transformation prior to resampling. 
+:::
+
+We can recreate some of the plots in Chapter 6, such as: 
+
+```{r chapter-06-fig-02, fig.height=4}
+library(patchwork)
+
+mol_weight_plot <- 
+  ggplot(solubility_train, aes(x = mol_weight, y = solubility)) + 
+  geom_point(alpha = .3)
+
+fp_plot <- 
+  solubility_train %>% 
+  mutate(fp_example = ifelse(fp_100 == 1, "structure present", "structure absent")) %>% 
+  ggplot(aes(x = fp_example, y = solubility)) + 
+  geom_boxplot() + 
+  labs(x = NULL)
+
+mol_weight_plot + fp_plot
+```
+
+To recreate Figure 3, a recipe with the Yeo-Johnson transformation is created:
+
+```{r chapter-06-rec}
+solubility_rec <- 
+  recipe(solubility ~ ., data = solubility_train) %>% 
+  step_zv(all_predictors()) %>% 
+  step_YeoJohnson(all_numeric_predictors())
+```
+
+The `prep()` function is used to estimate the transformation on the training set and `bake(new_data = NULL)` extracts the preprocessed training set. To make the plot, the predictor values are stacked using `tidyr::pivot_longer()` and then the plot is created: 
+
+```{r chapter-06-fig-03, fig.height=8, out.width="100%", warning=FALSE, dev = "png"}
+solubility_rec %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  select(-starts_with("fp")) %>% 
+  pivot_longer(cols = c(-solubility), names_to = "predictor", values_to = "value") %>% 
+  ggplot(aes(x = value, y = solubility)) +
+  geom_point(alpha = .3, cex = 0.5) +
+  geom_smooth(se = FALSE) +
+  facet_wrap(~ predictor, scales = "free_x") + 
+  labs(x = "YJ Transformed Predictors")
+```
+
+There are some warnings produced by this plot since a handful of predictors have very few unique values and the smoother cannot be used. 
+
+The same code for a correlation matrix (Figure 5) using the `r pkg(corrplot)` package can be used. Alternatively, the `r pkg(corrr)` package can also be used:
+
+```{r chapter-06-corrr}
+library(corrr)
+
+cor_values <- 
+  solubility_rec %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  select(-starts_with("fp"), -solubility) %>% 
+  correlate()
+```
+
+A heatmap-like visualization can be produced using `rplot()`: 
+
+```{r chapter-06-fig-05}
+cor_values %>% 
+  rplot() + 
+  coord_fixed(ratio = 1) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+as well as a network diagram that connects the highly correlated predictors: 
+
+```{r chapter-06-corr-net}
+cor_values %>% 
+  network_plot(min_cor = .5)
+```
+
+## Ordinary Least Squares
+
+To fit a simple linear regression, the `r pkg(parsnip)` function `linear_reg()` is used with the default engine of `"lm"`. In _APM_, the predictors are initially filtered so that predictor pairs with absolute correlations greater than 0.90 were discarded. The recipe step `step_corr()` is used to achieve this. We combine these objects into a workflow: 
+
+```{r chapter-06-ols-def, message=FALSE}
+lin_reg_spec <- linear_reg() # <- the default engine is "lm"
+
+lin_reg_rec <- 
+  solubility_rec %>% 
+  step_corr(all_numeric_predictors(), threshold = 0.9)
+
+lin_reg_wflow <- 
+  workflow() %>% 
+  add_model(lin_reg_spec) %>% 
+  add_recipe(lin_reg_rec)
+```
+
+Since the filtering threshold is set, there is no model tuning. We will measure the performance for the model via resampling using `fit_resamples()`. The control function saves the out-of-sample predictions and the RMSE is measured for each fit. Ordinarily, RMSE and $R^2$ are measured. However, we only compute the former. 
+
+```{r chapter-06-ols-fit}
+rs_ctrl <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+rmse_stats <- metric_set(rmse)
+
+lin_reg_resamp <-
+  lin_reg_wflow %>% 
+  fit_resamples(solubility_folds, control = rs_ctrl, metrics = rmse_stats)
+```
+
+`collect_metrics()` shows the average RMSE value across the resamples: 
+
+```{r chapter-06-ols-eval}
+collect_metrics(lin_reg_resamp)
+```
+
+The `regression_plots()` function is a simple function that created visualizations of the observed versus predicted outcome data as well as a standard residual plot: 
+
+```{r chapter-06-fig-07}
+regression_plots(lin_reg_resamp)
+```
+
+Is 0.90 the best correlation threshold? `r pkg(caret)` is unable to tune over preprocessing steps but tidymodels can. The same recipe is recreated but, instead of giving the `threshold` argument a number, a value of `tune()` is used to mark it for optimization. `tune_grid()` can be used to evaluate a series of pre-specified threshold values: 
+
+```{r chapter-06-ols-tune}
+gd_ctrl <-
+  control_grid(
+    save_pred = TRUE,
+    parallel_over = "everything",
+    save_workflow = TRUE
+  )
+
+lin_reg_tune_rec <- 
+  solubility_rec %>% 
+  step_corr(all_numeric_predictors(), threshold = tune())
+
+lin_reg_tune_wflow <- 
+  workflow() %>% 
+  add_model(lin_reg_spec) %>% 
+  add_recipe(lin_reg_tune_rec)
+
+thresh_grid <- tibble(threshold = c((1:9)/10, 0.95, 0.99))
+
+lin_reg_tune <-
+  lin_reg_tune_wflow %>%
+  tune_grid(
+    solubility_folds,
+    grid = thresh_grid,
+    control = gd_ctrl,
+    metrics = rmse_stats
+  )
+```
+
+The results show that 0.90 is a good choice: 
+
+```{r chapter-06-ols-best}
+show_best(lin_reg_tune)
+```
+
+Additionally, we can produce a nice visualization using `autoplot()`: 
+
+```{r chapter-06-ols-perf-plot, fig.height=4}
+autoplot(lin_reg_tune)
+```
+
+## Partial Least Squares
+
+As discussed in _APM_, feature extraction using PCA or PLS can be a good alternative to correlation filtering in situations where predictors are correlated. 
+
+For PCA, a recipe is used to compute the components and the number of components is tagged with a value of `tune()`: 
+
+
+```{r chapter-06-pcr}
+pcr_rec <- 
+  solubility_rec %>% 
+  step_normalize(all_numeric_predictors()) %>% 
+  step_pca(all_numeric_predictors(), num_comp = tune())
+
+pcr_wflow <- 
+  workflow() %>% 
+  add_model(lin_reg_spec) %>% 
+  add_recipe(pcr_rec)
+```
+
+To do the same with PLS, the model code is contained in a "`r pkg(parsnip)`-adjacent" package called `r pkg(plsmod)`. That gives us a function called `pls()` and the number of components is tagged for optimization. 
+
+```{r chapter-06-pls, message=FALSE}
+library(plsmod)
+
+pls_spec <- 
+  pls(num_comp = tune()) %>% 
+  set_engine("mixOmics") %>% 
+  set_mode("regression")
+
+normalized_rec <- 
+  solubility_rec %>% 
+  step_normalize(all_numeric_predictors())
+
+pls_wflow <- 
+  workflow() %>% 
+  add_model(pls_spec) %>% 
+  add_recipe(normalized_rec)
+```
+
+Both models are processed using `tune_grid()` where up to 50 components are evaluated for each. 
+
+```{r chapter-06-feature-extract, cache = TRUE}
+pcr_tune <-
+  pcr_wflow %>% 
+  tune_grid(
+    solubility_folds, grid = tibble(num_comp = 1:50), 
+    control = gd_ctrl, metrics = rmse_stats
+  )
+
+pls_tune <-
+  pls_wflow %>%
+  tune_grid(
+    solubility_folds,  grid = tibble(num_comp = 1:50),
+    control = gd_ctrl, metrics = rmse_stats
+  )
+```
+
+We could use the `autoplot()` function to show the two patterns. Instead, we'll extract their performance values and reproduce Figure 11: 
+
+```{r chapter-06-fig-11}
+pls_tune_rme <- 
+  pls_tune %>% 
+  collect_metrics() %>% 
+  filter(.metric == "rmse") %>% 
+  mutate(model = "PLS")
+
+pcr_tune_rme <- 
+  pcr_tune %>% 
+  collect_metrics() %>% 
+  filter(.metric == "rmse") %>% 
+  mutate(model = "PCR")
+
+bind_rows(pcr_tune_rme, pls_tune_rme) %>% 
+  ggplot(aes(x = num_comp, y = mean, col = model)) +
+  geom_line() +
+  geom_point() + 
+  labs(x = "Number of Components", y = "rmse")
+```
+
+as well as Figure 13: 
+
+```{r chapter-06-fig-13}
+regression_plots(pcr_tune, parameters = select_best(pcr_tune)) + 
+  ggtitle("PCR")
+regression_plots(pls_tune, parameters = select_best(pls_tune)) + 
+  ggtitle("PLS")
+```
+
+We'll defer the code to compute variable importance until Chapter TODO.  
+
+## Penalized Models
+
+Yet another way to handle correlated predictors is via regularization. _APM_ Chapter 6 focuses on ridge regression, the lasso, and the elasticnet. The elasticnet model has been deprecated in favor of the `glmnet` model (and package). 
+
+:::rmdnotequal
+`r pkg(caret)` used the `r pkg(elasticnet)` for the ridge and lasso models. tidymodels uses the `r pkg(glmnet)` package instead and the results here, especially for ridge regression, are different. 
+:::
+
+The `r pkg(glmnet)` package has two main tuning parameters: the total amount of regularization as well as the proportion of _lasso_ regularization to use. The latter is used to modulate between the ridge model (i.e., all $L_2$ penalty) and the lasso model (pure $L_1$ penalty). To fit the ridge regression model, the `mixture` parameter is set to zero (meaning zero proportion of $L_1$ penalty):
+
+```{r chapter-06-fig-16, message=FALSE, fig.height=4}
+ridge_spec <- 
+  linear_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet")
+
+ridge_wflow <- 
+  workflow() %>% 
+  add_model(ridge_spec) %>% 
+  add_recipe(normalized_rec)
+
+ridge_tune <-
+  ridge_wflow %>%
+  tune_grid(solubility_folds,
+            grid = tibble(penalty = 10 ^ seq(-1.5, 1, length = 20)),
+            control = gd_ctrl, 
+            metrics = rmse_stats)
+
+autoplot(ridge_tune)
+```
+
+This is fairly different from Figure 16 of _APM_. For the lasso model, we set `mixture = 1`: 
+
+```{r chapter-06-lasso, fig.height=4}
+lasso_spec <- 
+  linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+
+lasso_wflow <- 
+  workflow() %>% 
+  add_model(lasso_spec) %>% 
+  add_recipe(normalized_rec)
+
+lasso_tune <-
+  lasso_wflow %>%
+  tune_grid(solubility_folds,
+            grid = tibble(penalty = 10 ^ seq(-4, 0, length = 20)),
+            control = gd_ctrl, 
+            metrics = rmse_stats)
+
+autoplot(lasso_tune)
+```
+
+To fit models that have both types of penalty, the `mixture` argument of `linear_reg()` is set to `tune()`: 
+
+```{r chapter-06-fig-18}
+glmnet_spec <- 
+  linear_reg(penalty = tune(), mixture = tune()) %>% 
+  set_engine("glmnet")
+
+glmnet_wflow <- 
+  workflow() %>% 
+  add_model(glmnet_spec) %>% 
+  add_recipe(normalized_rec)
+
+glmnet_grid <- 
+  tidyr::crossing(
+    penalty = 10^seq(-3, -1, length.out = 20), 
+    mixture = c(0.05, 0.2, 0.4, 0.6, 0.8, 1)
+  ) 
+
+glmnet_tune <-
+  glmnet_wflow %>%
+  tune_grid(solubility_folds,
+            grid = glmnet_grid,
+            control = gd_ctrl, 
+            metrics = rmse_stats)
+
+autoplot(glmnet_tune)
+```
+
+These results are more similar. The top five settings for this model show that there are several combinations of parameters with nearly equivalent RMSE values: 
+
+```{r chapter-06-glmnet-best}
+show_best(glmnet_tune)
+```
+
+Suppose that we were most happy with the `glmnet` results and would like to fit a model with the numerically best results shown above (e.g., `penalty` of `r select_best(glmnet_tune)$penalty` and a mixture value of `r select_best(glmnet_tune)$mixture`). The `select_best()` function can save those results in a tibble. From this, the original workflow is updated and the `fit()` function fits that particular model: 
+
+```{r chapter-06-glmnet-final}
+best_glmnet <- select_best(glmnet_tune)
+best_glmnet
+
+glmnet_fit <- 
+  glmnet_wflow %>% 
+  finalize_workflow(best_glmnet) %>% 
+  fit(solubility_train)
+```
+
+Both the fitted recipe and model are contained in this object (much like the results of using `caret::train()`). Then `predict(glmnet_fit, new_data)` is used to predict the solubility for new molecules. 
+
+
+
+```{r chapter-06-teardown, include = FALSE}
+if (grepl("mingw32", R.Version()$platform)) {
+  stopCluster(cl)
+} 
+
+save(lin_reg_tune, pcr_tune, pls_tune, ridge_tune, lasso_tune, glmnet_tune,
+     version = 2, compress = "xz", file = "RData/chapter_06.RData")
+```
