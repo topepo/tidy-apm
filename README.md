@@ -1,4 +1,4 @@
-# tidy-app
+# tidy-apm
 
 This repo is a tidymodels companion for the 2013 book "Applied Predictive Modeling". 
 
