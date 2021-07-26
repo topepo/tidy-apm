@@ -210,7 +210,7 @@ fuel_plots(mars_tune, mars_fit)
 
 ## Test set results
 
-We can evaluate the best two models on the test set. It is preferable to to create a split object using [`initial_split()`](https://www.tmwr.org/splitting.html#splitting-methods) and the put the [`last_fit()`](https://www.tidymodels.org/start/case-study/#last-fit) function. However, since we have separate data frames, we'll use `augment()`: 
+We can evaluate the best two models on the test set. It is preferable to create a split object using [`initial_split()`](https://www.tmwr.org/splitting.html#splitting-methods) and then apply the [`last_fit()`](https://www.tidymodels.org/start/case-study/#last-fit) function. However, since we have separate data frames, we'll use `augment()`: 
 
 ```{r chapter-02-fig-06, fig.height=4.5}
 # Predict the test set using the two best models
